@@ -49,6 +49,8 @@ def stuff(scale_video: float, video_file_path: click.Path):
             od_graph_def.ParseFromString(serialized_graph)
             tensorflow.import_graph_def(od_graph_def, name='')
 
+        session = tensorflow.Session(graph=detection_graph)
+
     label_map = label_map_util.load_labelmap(PATH_TO_LABELS)
     categories = label_map_util.convert_label_map_to_categories(
         label_map, max_num_classes=NUM_CLASSES, use_display_name=True,
@@ -84,7 +86,9 @@ def stuff(scale_video: float, video_file_path: click.Path):
         # [1, None, None, 3]
         image_np_expanded = numpy.expand_dims(frame, axis=0)
         # Actual detection.
-        output_dict = run_inference_for_single_image(frame, detection_graph)
+        output_dict = run_inference_for_single_image(
+            frame, session, detection_graph,
+        )
         detection_time = time.monotonic() - detection_start_time
 
         visualization_start_time = time.monotonic()
@@ -120,88 +124,86 @@ def stuff(scale_video: float, video_file_path: click.Path):
     cv2.destroyAllWindows()
 
 
-def run_inference_for_single_image(image, graph):
+def run_inference_for_single_image(image, session, graph):
     with graph.as_default():
-        with tensorflow.Session() as sess:
-            # Get handles to input and output tensors
-            ops = tensorflow.get_default_graph().get_operations()
-            all_tensor_names = {output.name for op in ops for output in
-                                op.outputs}
-            tensor_dict = {}
-            for key in [
-                'num_detections', 'detection_boxes', 'detection_scores',
-                'detection_classes', 'detection_masks'
-            ]:
-                tensor_name = key + ':0'
-                if tensor_name in all_tensor_names:
-                    tensor_dict[
-                        key] = tensorflow.get_default_graph().get_tensor_by_name(
-                        tensor_name)
-            if 'detection_masks' in tensor_dict:
-                # The following processing is only for single image
-                detection_boxes = tensorflow.squeeze(
-                    tensor_dict['detection_boxes'], [0],
-                )
-                detection_masks = tensorflow.squeeze(
-                    tensor_dict['detection_masks'], [0],
-                )
-
-                # Reframe is required to translate mask from box coordinates to
-                # image coordinates and fit the image size.
-                real_num_detection = tensorflow.cast(
-                    tensor_dict['num_detections'][0], tensorflow.int32,
-                )
-                detection_boxes = tensorflow.slice(
-                    detection_boxes, [0, 0], [real_num_detection, -1],
-                )
-                detection_masks = tensorflow.slice(
-                    detection_masks, [0, 0, 0], [real_num_detection, -1, -1],
-                )
-                detection_masks_reframed = (
-                    utils_ops.reframe_box_masks_to_image_masks(
-                        detection_masks,
-                        detection_boxes,
-                        image.shape[0],
-                        image.shape[1],
-                    )
-                )
-                detection_masks_reframed = tensorflow.cast(
-                    tensorflow.greater(detection_masks_reframed, 0.5),
-                    tensorflow.uint8,
-                )
-
-                # Follow the convention by adding back the batch dimension
-                tensor_dict['detection_masks'] = tensorflow.expand_dims(
-                    detection_masks_reframed, 0,
-                )
-
-            image_tensor = tensorflow.get_default_graph().get_tensor_by_name(
-                'image_tensor:0',
+        # Get handles to input and output tensors
+        ops = tensorflow.get_default_graph().get_operations()
+        all_tensor_names = {output.name for op in ops for output in
+                            op.outputs}
+        tensor_dict = {}
+        for key in [
+            'num_detections', 'detection_boxes', 'detection_scores',
+            'detection_classes', 'detection_masks'
+        ]:
+            tensor_name = key + ':0'
+            if tensor_name in all_tensor_names:
+                tensor_dict[
+                    key] = tensorflow.get_default_graph().get_tensor_by_name(
+                    tensor_name)
+        if 'detection_masks' in tensor_dict:
+            # The following processing is only for single image
+            detection_boxes = tensorflow.squeeze(
+                tensor_dict['detection_boxes'], [0],
+            )
+            detection_masks = tensorflow.squeeze(
+                tensor_dict['detection_masks'], [0],
             )
 
-            # Run inference
-            output_dict = sess.run(
-                tensor_dict,
-                feed_dict={image_tensor: numpy.expand_dims(image, 0)},
+            # Reframe is required to translate mask from box coordinates to
+            # image coordinates and fit the image size.
+            real_num_detection = tensorflow.cast(
+                tensor_dict['num_detections'][0], tensorflow.int32,
             )
-
-            # All outputs are float32 numpy arrays, so convert types as
-            # appropriate.
-            output_dict['num_detections'] = int(
-                output_dict['num_detections'][0],
+            detection_boxes = tensorflow.slice(
+                detection_boxes, [0, 0], [real_num_detection, -1],
             )
-            output_dict['detection_classes'] = (
-                output_dict['detection_classes'][0].astype(numpy.uint8)
+            detection_masks = tensorflow.slice(
+                detection_masks, [0, 0, 0], [real_num_detection, -1, -1],
             )
-            output_dict['detection_boxes'] = output_dict['detection_boxes'][0]
-            output_dict['detection_scores'] = (
-                output_dict['detection_scores'][0]
-            )
-
-            if 'detection_masks' in output_dict:
-                output_dict['detection_masks'] = (
-                    output_dict['detection_masks'][0]
+            detection_masks_reframed = (
+                utils_ops.reframe_box_masks_to_image_masks(
+                    detection_masks,
+                    detection_boxes,
+                    image.shape[0],
+                    image.shape[1],
                 )
+            )
+            detection_masks_reframed = tensorflow.cast(
+                tensorflow.greater(detection_masks_reframed, 0.5),
+                tensorflow.uint8,
+            )
+
+            # Follow the convention by adding back the batch dimension
+            tensor_dict['detection_masks'] = tensorflow.expand_dims(
+                detection_masks_reframed, 0,
+            )
+
+        image_tensor = tensorflow.get_default_graph().get_tensor_by_name(
+            'image_tensor:0',
+        )
+
+        # Run inference
+        output_dict = session.run(
+            tensor_dict, feed_dict={image_tensor: numpy.expand_dims(image, 0)},
+        )
+
+        # All outputs are float32 numpy arrays, so convert types as
+        # appropriate.
+        output_dict['num_detections'] = int(
+            output_dict['num_detections'][0],
+        )
+        output_dict['detection_classes'] = (
+            output_dict['detection_classes'][0].astype(numpy.uint8)
+        )
+        output_dict['detection_boxes'] = output_dict['detection_boxes'][0]
+        output_dict['detection_scores'] = (
+            output_dict['detection_scores'][0]
+        )
+
+        if 'detection_masks' in output_dict:
+            output_dict['detection_masks'] = (
+                output_dict['detection_masks'][0]
+            )
 
     return output_dict
 
