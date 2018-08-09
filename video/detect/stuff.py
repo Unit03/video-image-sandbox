@@ -30,13 +30,16 @@ NUM_CLASSES = 90
 
 
 @detect.command("stuff")
+@click.option(
+    "--scale-video", type=float, default=1, help="Video scaling factor",
+)
 @click.argument(
     "video_file_path",
     type=click.Path(
         exists=True, file_okay=True, readable=True, resolve_path=True,
     ),
 )
-def stuff(video_file_path: click.Path):
+def stuff(scale_video: float, video_file_path: click.Path):
     start_time = time.monotonic()
     detection_graph = tensorflow.Graph()
     with detection_graph.as_default():
@@ -65,26 +68,29 @@ def stuff(video_file_path: click.Path):
             break
 
         resize_start_time = time.monotonic()
-        image = cv2.resize(
-            frame, None, fx=0.4, fy=0.4, interpolation=cv2.INTER_CUBIC,
+        frame = cv2.resize(
+            frame,
+            None,
+            fx=scale_video,
+            fy=scale_video,
+            interpolation=cv2.INTER_CUBIC,
         )
         resize_time = time.monotonic() - resize_start_time
         converting_start_time = time.monotonic()
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         converting_time = time.monotonic() - converting_start_time
 
         detection_start_time = time.monotonic()
         # Expand dimensions since the model expects images to have shape:
         # [1, None, None, 3]
-        image_np_expanded = numpy.expand_dims(image, axis=0)
+        image_np_expanded = numpy.expand_dims(frame, axis=0)
         # Actual detection.
-        output_dict = run_inference_for_single_image(image, detection_graph)
+        output_dict = run_inference_for_single_image(frame, detection_graph)
         detection_time = time.monotonic() - detection_start_time
 
         visualization_start_time = time.monotonic()
         # Visualization of the results of a detection.
         visualization_utils.visualize_boxes_and_labels_on_image_array(
-            image,
+            frame,
             output_dict['detection_boxes'],
             output_dict['detection_classes'],
             output_dict['detection_scores'],
@@ -95,7 +101,7 @@ def stuff(video_file_path: click.Path):
         )
         visualization_time = time.monotonic() - visualization_start_time
 
-        cv2.imshow("image", image)
+        cv2.imshow("image", frame)
         sys.stdout.write(
             "\r"
             f"{frames / (time.monotonic() - video_start_time):.6f} fps"
