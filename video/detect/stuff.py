@@ -1,3 +1,4 @@
+import multiprocessing
 import numpy
 import os
 import sys
@@ -46,7 +47,64 @@ def stuff(
         out_video: typing.Optional[click.Path],
         video_file_path: click.Path,
 ) -> None:
-    start_time = time.monotonic()
+    logger = multiprocessing.log_to_stderr()
+    logger.setLevel(multiprocessing.SUBDEBUG)
+
+    input_queue = multiprocessing.Queue(maxsize=5)
+    output_queue = multiprocessing.Queue(maxsize=5)
+    pool = multiprocessing.Pool(2, run_worker, (input_queue, output_queue))
+
+    video = cv2.VideoCapture(video_file_path)
+
+    video_start_time = time.time()
+    frames = 0
+    out = None
+    while video.isOpened():
+        ret, frame = video.read()
+        frames += 1
+        if frame is None:
+            break
+
+        frame = cv2.resize(
+            frame,
+            None,
+            fx=scale_video,
+            fy=scale_video,
+            interpolation=cv2.INTER_CUBIC,
+        )
+
+        if out_video and out is None:
+            fourcc = cv2.VideoWriter_fourcc(*"XVID")
+            out = cv2.VideoWriter(
+                out_video, fourcc, 20.0, (frame.shape[1], frame.shape[0]),
+            )
+
+        # image_np_expanded = numpy.expand_dims(frame, axis=0)
+        input_queue.put(frame)
+        frame = output_queue.get()
+
+        if out:
+            out.write(frame)
+
+        cv2.imshow("image", frame)
+        sys.stdout.write(
+            f"\r{frames / (time.time() - video_start_time):.6f} fps"
+            f" {frames} / {time.time() - video_start_time} s"
+        )
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+            break
+
+    video.release()
+    if out:
+        out.release()
+
+    cv2.destroyAllWindows()
+
+
+def run_worker(
+        input_queue: multiprocessing.Queue,
+        output_queue: multiprocessing.Queue,
+) -> None:
     detection_graph = tensorflow.Graph()
     with detection_graph.as_default():
         od_graph_def = tensorflow.GraphDef()
@@ -62,49 +120,12 @@ def stuff(
         label_map, max_num_classes=NUM_CLASSES, use_display_name=True,
     )
     category_index = label_map_util.create_category_index(categories)
-    print(f"Warmup time: {(time.monotonic() - start_time):.6f} s")
 
-    video = cv2.VideoCapture(video_file_path)
-
-    video_start_time = time.monotonic()
-    frames = 0
-    out = None
-    while video.isOpened():
-        frame_start_time = time.monotonic()
-        ret, frame = video.read()
-        frames += 1
-        frame_read_time = time.monotonic() - frame_start_time
-        if frame is None:
-            break
-
-        resize_start_time = time.monotonic()
-        frame = cv2.resize(
-            frame,
-            None,
-            fx=scale_video,
-            fy=scale_video,
-            interpolation=cv2.INTER_CUBIC,
-        )
-        resize_time = time.monotonic() - resize_start_time
-
-        if out_video and out is None:
-            fourcc = cv2.VideoWriter_fourcc(*"XVID")
-            out = cv2.VideoWriter(
-                out_video, fourcc, 20.0, (frame.shape[1], frame.shape[0]),
-            )
-
-        detection_start_time = time.monotonic()
-        # Expand dimensions since the model expects images to have shape:
-        # [1, None, None, 3]
-        image_np_expanded = numpy.expand_dims(frame, axis=0)
-        # Actual detection.
+    while True:
+        frame = input_queue.get()
         output_dict = run_inference_for_single_image(
             frame, session, detection_graph,
         )
-        detection_time = time.monotonic() - detection_start_time
-
-        visualization_start_time = time.monotonic()
-        # Visualization of the results of a detection.
         visualization_utils.visualize_boxes_and_labels_on_image_array(
             frame,
             output_dict['detection_boxes'],
@@ -115,30 +136,10 @@ def stuff(
             use_normalized_coordinates=True,
             line_thickness=8,
         )
-        visualization_time = time.monotonic() - visualization_start_time
 
-        if out:
-            out.write(frame)
+        output_queue.put(frame)
 
-        cv2.imshow("image", frame)
-        sys.stdout.write(
-            "\r"
-            f"{frames / (time.monotonic() - video_start_time):.6f} fps"
-            f", frame: {(time.monotonic() - frame_start_time):.6f} s"
-            f" (read: {frame_read_time:.6f} s"
-            f", resize: {resize_time:.6f} s"
-            f", detection: {detection_time:.6f} s"
-            f", visualisation: {visualization_time:.6f} s)",
-        )
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
-
-    print("")
-    video.release()
-    if out:
-        out.release()
-
-    cv2.destroyAllWindows()
+    session.close()
 
 
 def run_inference_for_single_image(image, session, graph):
@@ -154,9 +155,12 @@ def run_inference_for_single_image(image, session, graph):
         ]:
             tensor_name = key + ':0'
             if tensor_name in all_tensor_names:
-                tensor_dict[
-                    key] = tensorflow.get_default_graph().get_tensor_by_name(
-                    tensor_name)
+                tensor_dict[key] = (
+                    tensorflow
+                    .get_default_graph()
+                    .get_tensor_by_name(tensor_name)
+                )
+
         if 'detection_masks' in tensor_dict:
             # The following processing is only for single image
             detection_boxes = tensorflow.squeeze(
