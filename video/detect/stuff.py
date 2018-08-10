@@ -37,6 +37,9 @@ NUM_CLASSES = 90
 @click.option(
     "--scale-video", type=float, default=1, help="Video scaling factor",
 )
+@click.option(
+    "--workers", type=int, default=1, help="Number of worker processes",
+)
 @click.option("--out-video", type=click.Path(exists=False, writable=True))
 @click.argument(
     "video_file_path",
@@ -46,6 +49,7 @@ NUM_CLASSES = 90
 )
 def stuff(
         scale_video: float,
+        workers: int,
         out_video: typing.Optional[click.Path],
         video_file_path: click.Path,
 ) -> None:
@@ -60,7 +64,7 @@ def stuff(
     input_queue = multiprocessing.Queue(maxsize=5)
     output_queue = multiprocessing.Queue(maxsize=5)
     pool = multiprocessing.Pool(
-        2, run_worker, (input_queue, output_queue, frame.shape),
+        workers, run_worker, (input_queue, output_queue, frame.shape),
     )
 
     video = cv2.VideoCapture(video_file_path)
