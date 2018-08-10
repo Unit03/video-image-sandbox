@@ -46,8 +46,8 @@ def faces(video_file_path: click.Path):
                 cv2.rectangle(roi_color, (ex, ey), (ex + ew, ey + eh),
                               (0, 255, 0), 2)
 
-        cv2.imshow('frame', gray)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        cv2.imshow("frame", gray)
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
     vc.release()
