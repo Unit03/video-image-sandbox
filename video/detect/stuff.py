@@ -3,6 +3,7 @@ import os
 import sys
 import tarfile
 import time
+import typing
 import urllib
 
 import click
@@ -33,13 +34,18 @@ NUM_CLASSES = 90
 @click.option(
     "--scale-video", type=float, default=1, help="Video scaling factor",
 )
+@click.option("--out-video", type=click.Path(exists=False, writable=True))
 @click.argument(
     "video_file_path",
     type=click.Path(
         exists=True, file_okay=True, readable=True, resolve_path=True,
     ),
 )
-def stuff(scale_video: float, video_file_path: click.Path):
+def stuff(
+        scale_video: float,
+        out_video: typing.Optional[click.Path],
+        video_file_path: click.Path,
+) -> None:
     start_time = time.monotonic()
     detection_graph = tensorflow.Graph()
     with detection_graph.as_default():
@@ -59,8 +65,10 @@ def stuff(scale_video: float, video_file_path: click.Path):
     print(f"Warmup time: {(time.monotonic() - start_time):.6f} s")
 
     video = cv2.VideoCapture(video_file_path)
+
     video_start_time = time.monotonic()
     frames = 0
+    out = None
     while video.isOpened():
         frame_start_time = time.monotonic()
         ret, frame = video.read()
@@ -78,8 +86,12 @@ def stuff(scale_video: float, video_file_path: click.Path):
             interpolation=cv2.INTER_CUBIC,
         )
         resize_time = time.monotonic() - resize_start_time
-        converting_start_time = time.monotonic()
-        converting_time = time.monotonic() - converting_start_time
+
+        if out_video and out is None:
+            fourcc = cv2.VideoWriter_fourcc(*"XVID")
+            out = cv2.VideoWriter(
+                out_video, fourcc, 20.0, (frame.shape[1], frame.shape[0]),
+            )
 
         detection_start_time = time.monotonic()
         # Expand dimensions since the model expects images to have shape:
@@ -105,6 +117,9 @@ def stuff(scale_video: float, video_file_path: click.Path):
         )
         visualization_time = time.monotonic() - visualization_start_time
 
+        if out:
+            out.write(frame)
+
         cv2.imshow("image", frame)
         sys.stdout.write(
             "\r"
@@ -112,7 +127,6 @@ def stuff(scale_video: float, video_file_path: click.Path):
             f", frame: {(time.monotonic() - frame_start_time):.6f} s"
             f" (read: {frame_read_time:.6f} s"
             f", resize: {resize_time:.6f} s"
-            f", convert: {converting_time:.6f} s"
             f", detection: {detection_time:.6f} s"
             f", visualisation: {visualization_time:.6f} s)",
         )
@@ -121,6 +135,9 @@ def stuff(scale_video: float, video_file_path: click.Path):
 
     print("")
     video.release()
+    if out:
+        out.release()
+
     cv2.destroyAllWindows()
 
 
